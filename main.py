@@ -4,6 +4,45 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import subprocess
+from contextlib import asynccontextmanager
+
+NETWORK_NAME = "openplanetracker_sdr_network"
+
+def self_connect_to_network():
+    try:
+        client = docker.from_env()
+        
+        # Preverimo, če omrežje že obstaja, sicer ga ustvarimo
+        try:
+            network = client.networks.get(NETWORK_NAME)
+        except docker.errors.NotFound:
+            print(f"[Sentinel] Omrežje {NETWORK_NAME} ne obstaja. Ustvarjam...")
+            network = client.networks.create(NETWORK_NAME, driver="bridge")
+        
+        # Poiščemo samega sebe (vsebnik sentinel)
+        try:
+            self_container = client.containers.get("sentinel")
+            
+            # Preverimo, če smo že del tega omrežja
+            networks = self_container.attrs["NetworkSettings"]["Networks"]
+            if NETWORK_NAME not in networks:
+                print(f"[Sentinel] Povezujem vsebnik 'sentinel' v omrežje {NETWORK_NAME}...")
+                network.connect(self_container)
+                print("[Sentinel] Uspešno povezan!")
+            else:
+                print(f"[Sentinel] Vsebnik je že povezan v omrežje {NETWORK_NAME}.")
+        except docker.errors.NotFound:
+            print("[Sentinel] Opozorilo: Vsebnika z imenom 'sentinel' ni mogoče najti. Tečeš izven Dockerja?")
+            
+    except Exception as e:
+        print(f"[Sentinel] Napaka pri samodejnem povezovanju v omrežje: {e}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Koda, ki se izvede OB ZAGONU aplikacije
+    self_connect_to_network()
+    yield
+    # Koda, ki se izvede OB USTAVITVI aplikacije (prazno)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="/app/static"), name="static")
