@@ -12,7 +12,7 @@
     </style>
 </head>
 <body>
-    <h1>🛰️ Sentinel SDR Manager</h1>
+    <h1>Sentinel SDR Manager</h1>
     
     <div class="card" id="updateCard">
         <h3>🚀 OpenPlaneTracker UI Update Available!</h3>
@@ -49,17 +49,26 @@
         async function loadUSBDevices() {
             try {
                 let res = await fetch('/api/usb-devices');
+                if (!res.ok) {
+                    throw new Error(`Server returned status ${res.status}`);
+                }
+                
                 let data = await res.json();
                 let select = document.getElementById('sdrIndex');
+                
+                // Najprej izpraznimo meni
                 select.innerHTML = '';
                 
                 let sdrFound = false;
                 let firstSelected = false;
+
                 data.forEach(dev => {
-                    if(dev.is_sdr) {
+                    if (dev.is_sdr) {
                         sdrFound = true;
                         let opt = document.createElement('option');
-                        opt.value = dev.readsb_index;
+                        
+                        // Pretvorba v string prepreči težave z vrednostjo 0
+                        opt.value = dev.readsb_index.toString(); 
                         
                         if (dev.in_use) {
                             opt.text = `[IN USE] [SDR Index ${dev.readsb_index}] ${dev.label}`;
@@ -79,23 +88,9 @@
                     select.innerHTML = '<option value="0">No SDRs detected (Fallback to Index 0)</option>';
                 }
             } catch(e) {
+                console.error("Napaka pri nalaganju naprav:", e); // To ti bo v Konzoli (F12) pokazalo dejansko napako
                 document.getElementById('sdrIndex').innerHTML = '<option value="0">Error loading devices (Index 0)</option>';
             }
-        }
-
-        async function loadSDRs() {
-            let res = await fetch('/api/sdrs');
-            let data = await res.json();
-            let tbody = document.getElementById('sdrList');
-            tbody.innerHTML = '';
-            data.forEach(sdr => {
-                tbody.innerHTML += `<tr>
-                    <td>${sdr.name}</td>
-                    <td>${sdr.status}</td>
-                    <td>${sdr.ip}</td>
-                    <td><button onclick="deleteSDR('${sdr.name}')">Stop & Remove</button></td>
-                </tr>`;
-            });
         }
 
         async function addSDR() {
@@ -103,7 +98,7 @@
             let idx = document.getElementById('sdrIndex').value;
             let ppm = document.getElementById('sdrPPM').value || 0;
             if(!name) return alert("Enter a name!");
-            if(!idx || isNaN(idx)) return alert("Select an available SDR device!");
+            if(idx === "" || isNaN(idx)) return alert("Select an available SDR device!");
 
             let res = await fetch('/api/sdrs', {
                 method: 'POST',
