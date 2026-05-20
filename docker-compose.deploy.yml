@@ -1,0 +1,11 @@
+services:
+  sentinel:
+    image: mmatvoz/openplanetracker-sentinel:latest
+    container_name: sentinel
+    privileged: true
+    ports:
+      - "8001:8001"
+      # (Note: live-viewer binds to Host Port 80 directly from the orchestrator)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /dev/bus/usb:/dev/bus/usb

@@ -1,0 +1,96 @@
+import docker
+import secrets
+
+client = docker.from_env()
+NETWORK_NAME = "opt_internal"
+
+def init_infrastructure():
+    print("Initializing Infrastructure...")
+    try:
+        client.networks.get(NETWORK_NAME)
+    except docker.errors.NotFound:
+        print(f"Creating network: {NETWORK_NAME}")
+        client.networks.create(NETWORK_NAME, driver="bridge")
+
+    for vol in ["opt_postgres_data", "opt_influx_data", "opt_config_data"]:
+        try:
+            client.volumes.get(vol)
+        except docker.errors.NotFound:
+            print(f"Creating volume: {vol}")
+            client.volumes.create(vol)
+
+    try:
+        client.containers.get("db")
+    except docker.errors.NotFound:
+        print("Deploying Postgres DB...")
+        client.containers.run(
+            "postgres:15",
+            name="db",
+            detach=True,
+            network=NETWORK_NAME,
+            volumes={"opt_postgres_data": {"bind": "/var/lib/postgresql/data", "mode": "rw"}},
+            environment={"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgrespw", "POSTGRES_DB": "planetracker"},
+            restart_policy={"Name": "unless-stopped"}
+        )
+
+    try:
+        client.containers.get("influxdb")
+    except docker.errors.NotFound:
+        print("Deploying InfluxDB...")
+        token = secrets.token_urlsafe(32)
+        # Write the token directly into the shared configuration volume
+        client.containers.run(
+            "alpine",
+            command=f"sh -c 'echo {token} > /config/influx_token.txt'",
+            volumes={"opt_config_data": {"bind": "/config", "mode": "rw"}},
+            remove=True
+        )
+        
+        client.containers.run(
+            "influxdb:2",
+            name="influxdb",
+            detach=True,
+            network=NETWORK_NAME,
+            volumes={"opt_influx_data": {"bind": "/var/lib/influxdb2", "mode": "rw"}},
+            environment=[
+                "DOCKER_INFLUXDB_INIT_MODE=setup",
+                "DOCKER_INFLUXDB_INIT_USERNAME=admin",
+                "DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword12345",
+                "DOCKER_INFLUXDB_INIT_ORG=planetracker",
+                "DOCKER_INFLUXDB_INIT_BUCKET=flights",
+                "DOCKER_INFLUXDB_INIT_RETENTION=0",
+                f"DOCKER_INFLUXDB_INIT_ADMIN_TOKEN={token}"
+            ],
+            restart_policy={"Name": "unless-stopped"}
+        )
+
+def deploy_ui():
+    print("Checking UI Container...")
+    try:
+        print("Pulling latest mmatvoz/openplanetracker-ui:latest...")
+        client.images.pull("mmatvoz/openplanetracker-ui:latest")
+    except Exception as e:
+        print(f"Warning: Could not pull UI image (has it been uploaded to Docker Hub yet?): {e}")
+
+    try:
+        c = client.containers.get("live-viewer")
+        if c.status != "running":
+            c.start()
+    except docker.errors.NotFound:
+        print("Starting live-viewer container on port 80...")
+        try:
+            client.containers.run(
+                "mmatvoz/openplanetracker-ui:latest",
+                name="live-viewer",
+                detach=True,
+                ports={"8000/tcp": 80}, # Binding container 8000 to host 80
+                network=NETWORK_NAME,
+                volumes={"opt_config_data": {"bind": "/config", "mode": "ro"}},
+                restart_policy={"Name": "unless-stopped"}
+            )
+        except Exception as e:
+            print(f"Local fallback or failure deploying UI: {e}")
+
+if __name__ == "__main__":
+    init_infrastructure()
+    deploy_ui()

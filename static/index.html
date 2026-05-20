@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sentinel SDR Manager</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f4f4f9; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+        button { padding: 8px 12px; cursor: pointer; }
+        #updateCard { display: none; background-color: #fff3cd; border-left: 5px solid #ffeeba; }
+    </style>
+</head>
+<body>
+    <h1>🛰️ Sentinel SDR Manager</h1>
+    
+    <div class="card" id="updateCard">
+        <h3>🚀 OpenPlaneTracker UI Update Available!</h3>
+        <p>A new version of the map viewer container has been published to Docker Hub.</p>
+        <button onclick="updateUI()" style="background: #28a745; color: white; border: none; font-weight: bold;">Update Now</button>
+    </div>
+
+    <div class="card">
+        <h3>Add New SDR</h3>
+        <input type="text" id="sdrName" placeholder="Name (e.g. sdr1)">
+        <select id="sdrIndex">
+            <option value="">Loading USB Devices...</option>
+        </select>
+        <input type="number" id="sdrPPM" placeholder="PPM Offset (e.g. 0)" value="0">
+        <button onclick="addSDR()">Deploy SDR</button>
+    </div>
+
+    <div class="card">
+        <h3>Active SDR Instances</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>IP Address</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="sdrList"></tbody>
+        </table>
+    </div>
+
+    <script>
+        async function loadUSBDevices() {
+            try {
+                let res = await fetch('/api/usb-devices');
+                let data = await res.json();
+                let select = document.getElementById('sdrIndex');
+                select.innerHTML = '';
+                
+                let sdrFound = false;
+                let firstSelected = false;
+                data.forEach(dev => {
+                    if(dev.is_sdr) {
+                        sdrFound = true;
+                        let opt = document.createElement('option');
+                        opt.value = dev.readsb_index;
+                        
+                        if (dev.in_use) {
+                            opt.text = `[IN USE] [SDR Index ${dev.readsb_index}] ${dev.label}`;
+                            opt.disabled = true;
+                        } else {
+                            opt.text = `[SDR Index ${dev.readsb_index}] ${dev.label}`;
+                            if (!firstSelected) {
+                                opt.selected = true;
+                                firstSelected = true;
+                            }
+                        }
+                        select.appendChild(opt);
+                    }
+                });
+                
+                if (!sdrFound) {
+                    select.innerHTML = '<option value="0">No SDRs detected (Fallback to Index 0)</option>';
+                }
+            } catch(e) {
+                document.getElementById('sdrIndex').innerHTML = '<option value="0">Error loading devices (Index 0)</option>';
+            }
+        }
+
+        async function loadSDRs() {
+            let res = await fetch('/api/sdrs');
+            let data = await res.json();
+            let tbody = document.getElementById('sdrList');
+            tbody.innerHTML = '';
+            data.forEach(sdr => {
+                tbody.innerHTML += `<tr>
+                    <td>${sdr.name}</td>
+                    <td>${sdr.status}</td>
+                    <td>${sdr.ip}</td>
+                    <td><button onclick="deleteSDR('${sdr.name}')">Stop & Remove</button></td>
+                </tr>`;
+            });
+        }
+
+        async function addSDR() {
+            let name = document.getElementById('sdrName').value;
+            let idx = document.getElementById('sdrIndex').value;
+            let ppm = document.getElementById('sdrPPM').value || 0;
+            if(!name) return alert("Enter a name!");
+            if(!idx || isNaN(idx)) return alert("Select an available SDR device!");
+
+            let res = await fetch('/api/sdrs', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name: name, device_index: parseInt(idx), ppm: parseInt(ppm)})
+            });
+            
+            if(!res.ok) {
+                let errorData = await res.json();
+                alert(errorData.detail || "Failed to deploy SDR.");
+            }
+
+            document.getElementById('sdrName').value = '';
+            loadSDRs();
+            loadUSBDevices();
+        }
+
+        async function deleteSDR(name) {
+            if(!confirm(`Delete ${name}?`)) return;
+            await fetch(`/api/sdrs/${name}`, {method: 'DELETE'});
+            loadSDRs();
+            loadUSBDevices();
+        }
+        
+        async function checkUpdate() {
+            try {
+                let res = await fetch('/api/check-update');
+                let data = await res.json();
+                if(data.update_available) {
+                    document.getElementById('updateCard').style.display = 'block';
+                }
+            } catch (e) {}
+        }
+        
+        async function updateUI() {
+            if(!confirm("This will pull the latest OpenPlaneTracker UI from Docker Hub and restart the Map viewer. Continue?")) return;
+            document.getElementById('updateCard').innerHTML = '<p>Updating... please wait.</p>';
+            let res = await fetch('/api/update-ui', {method: 'POST'});
+            if(res.ok) {
+                alert('Update completed successfully! Open your map at port 80.');
+                document.getElementById('updateCard').style.display = 'none';
+            } else {
+                alert('An error occurred during update.');
+            }
+            checkUpdate();
+        }
+
+        loadUSBDevices();
+        loadSDRs();
+        checkUpdate();
+        setInterval(loadSDRs, 5000);
+        setInterval(checkUpdate, 60000); // Check for updates every minute
