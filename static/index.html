@@ -49,14 +49,10 @@
         async function loadUSBDevices() {
             try {
                 let res = await fetch('/api/usb-devices');
-                if (!res.ok) {
-                    throw new Error(`Server returned status ${res.status}`);
-                }
+                if (!res.ok) throw new Error(`Server returned status ${res.status}`);
                 
                 let data = await res.json();
                 let select = document.getElementById('sdrIndex');
-                
-                // Najprej izpraznimo meni
                 select.innerHTML = '';
                 
                 let sdrFound = false;
@@ -66,8 +62,6 @@
                     if (dev.is_sdr) {
                         sdrFound = true;
                         let opt = document.createElement('option');
-                        
-                        // Pretvorba v string prepreči težave z vrednostjo 0
                         opt.value = dev.readsb_index.toString(); 
                         
                         if (dev.in_use) {
@@ -88,8 +82,32 @@
                     select.innerHTML = '<option value="0">No SDRs detected (Fallback to Index 0)</option>';
                 }
             } catch(e) {
-                console.error("Napaka pri nalaganju naprav:", e); // To ti bo v Konzoli (F12) pokazalo dejansko napako
+                console.error("Napaka pri nalaganju naprav:", e);
                 document.getElementById('sdrIndex').innerHTML = '<option value="0">Error loading devices (Index 0)</option>';
+            }
+        }
+
+        // --- MANJKAJOČA FUNKCIJA, KI JO KLIČEŠ V KODI ---
+        async function loadSDRs() {
+            try {
+                let res = await fetch('/api/sdrs'); // Prilagodi API pot, če je drugačna
+                if (!res.ok) return;
+                let sdrs = await res.json();
+                let tbody = document.getElementById('sdrList');
+                tbody.innerHTML = '';
+
+                sdrs.forEach(sdr => {
+                    let tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${sdr.name}</td>
+                        <td><span style="color: green;">● Running</span></td>
+                        <td>${sdr.ip || '127.0.0.1'}</td>
+                        <td><button onclick="deleteSDR('${sdr.name}')" style="background:#dc3545; color:white; border:none; border-radius:4px;">Delete</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                console.error("Napaka pri nalaganju aktivnih SDR-jev:", e);
             }
         }
 
@@ -146,8 +164,14 @@
             checkUpdate();
         }
 
+        // Zagon ob nalaganju strani
         loadUSBDevices();
         loadSDRs();
         checkUpdate();
+        
+        // Intervalno osveževanje
         setInterval(loadSDRs, 5000);
-        setInterval(checkUpdate, 60000); // Check for updates every minute
+        setInterval(checkUpdate, 60000);
+    </script>
+</body>
+</html>
