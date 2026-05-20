@@ -2,7 +2,7 @@ import docker
 import secrets
 
 client = docker.from_env()
-NETWORK_NAME = "opt_internal"
+NETWORK_NAME = "openplanetracker_sdr_network"
 
 def init_infrastructure():
     print("Initializing Infrastructure...")
