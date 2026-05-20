@@ -175,3 +175,35 @@ def update_ui():
         return {"status": "updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/server")
+def server_status():
+    try:
+        c = client.containers.get("openplanetracker-server")
+        return {"deployed": True, "status": c.status}
+    except docker.errors.NotFound:
+        return {"deployed": False}
+
+
+@app.post("/api/server/deploy")
+def deploy_server(expose_port: int | None = None):
+    try:
+        import orchestrator
+        orchestrator.deploy_server(expose_port)
+        return {"status": "deploying"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/server")
+def remove_server():
+    try:
+        c = client.containers.get("openplanetracker-server")
+        c.stop(timeout=2)
+        c.remove()
+        return {"status": "removed"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Server not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

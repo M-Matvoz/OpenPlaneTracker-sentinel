@@ -33,6 +33,18 @@ def init_infrastructure():
             restart_policy={"Name": "unless-stopped"}
         )
 
+    # Setup Admin authentication for external data operations
+    admin_token = secrets.token_urlsafe(32)
+    try:
+        client.containers.run(
+            "alpine",
+            command=f"sh -c 'if [ ! -f /config/admin_token.txt ]; then echo {admin_token} > /config/admin_token.txt; fi'",
+            volumes={"opt_config_data": {"bind": "/config", "mode": "rw"}},
+            remove=True
+        )
+    except Exception as e:
+        print(f"Warning writing admin_token: {e}")
+
     try:
         client.containers.get("influxdb")
     except docker.errors.NotFound:
@@ -90,6 +102,40 @@ def deploy_ui():
             )
         except Exception as e:
             print(f"Local fallback or failure deploying UI: {e}")
+
+def deploy_server(expose_port: int | None = None):
+    """Deploy the optional remote ingest server. If expose_port is provided
+    the container's port 8080 will be published to the host on that port.
+    """
+    print("Checking server container...")
+    try:
+        print("Pulling latest mmatvoz/openplanetracker-server:latest...")
+        client.images.pull("mmatvoz/openplanetracker-server:latest")
+    except Exception as e:
+        print(f"Warning: Could not pull Server image: {e}")
+
+    try:
+        c = client.containers.get("openplanetracker-server")
+        if c.status != "running":
+            c.start()
+        return
+    except docker.errors.NotFound:
+        pass
+
+    try:
+        print("Starting openplanetracker-server container...")
+        ports = {"8080/tcp": int(expose_port)} if expose_port else None
+        client.containers.run(
+            "mmatvoz/openplanetracker-server:latest",
+            name="openplanetracker-server",
+            detach=True,
+            network=NETWORK_NAME,
+            volumes={"opt_config_data": {"bind": "/config", "mode": "ro"}},
+            ports=ports,
+            restart_policy={"Name": "unless-stopped"}
+        )
+    except Exception as e:
+        print(f"Failed to start server container: {e}")
 
 if __name__ == "__main__":
     init_infrastructure()
