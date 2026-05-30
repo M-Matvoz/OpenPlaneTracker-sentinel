@@ -355,16 +355,35 @@ def restart_ui():
 
 @app.post("/api/update-sentinel")
 def update_sentinel():
-    """One-click pull + redeploy the Sentinel container itself."""
+    """Trigger a background updater container that pulls and redeploys Sentinel.
+
+    Running this from inside the Sentinel container cannot stop/remove and then
+    recreate itself reliably (the process would be killed). Instead we start a
+    short-lived helper container that uses the Docker CLI (via the host Docker
+    socket) to perform the pull/remove/run sequence on the host.
+    """
     try:
-        import orchestrator
+        # Unique name for the helper
+        updater_name = f"sentinel-updater-{int(time.time())}"
 
-        def _delayed_update():
-            time.sleep(1)
-            orchestrator.redeploy_sentinel()
+        # The command runs docker CLI inside the helper container against the host
+        docker_run_cmd = (
+            "sh -c \"docker pull mmatvoz/openplanetracker-sentinel:latest && "
+            "docker rm -f sentinel || true && "
+            "docker run -d --name sentinel --privileged --network openplanetracker_sdr_network "
+            "-p 8001:8001 -v /dev/bus/usb:/dev/bus/usb -v opt_config_data:/config "
+            "--restart unless-stopped mmatvoz/openplanetracker-sentinel:latest\"")
 
-        threading.Thread(target=_delayed_update, daemon=True).start()
-        return {"status": "updating"}
+        client.containers.run(
+            "docker:24",
+            command=docker_run_cmd,
+            name=updater_name,
+            detach=True,
+            volumes={"/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"}},
+            restart_policy={"Name": "on-failure", "MaximumRetryCount": 1},
+        )
+
+        return {"status": "updater_started", "updater": updater_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
