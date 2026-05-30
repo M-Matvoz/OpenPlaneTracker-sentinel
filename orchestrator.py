@@ -53,6 +53,7 @@ def ensure_shared_psk() -> str:
         print(f"Warning writing shared_psk: {e}")
     return shared_psk
 
+
 def init_infrastructure():
     print("Initializing Infrastructure...")
     if client is None:
@@ -82,7 +83,7 @@ def init_infrastructure():
             network=NETWORK_NAME,
             volumes={"opt_postgres_data": {"bind": "/var/lib/postgresql/data", "mode": "rw"}},
             environment={"POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgrespw", "POSTGRES_DB": "planetracker"},
-            restart_policy={"Name": "unless-stopped"}
+            restart_policy={"Name": "unless-stopped"},
         )
 
     # Setup Admin authentication for external data operations
@@ -105,9 +106,9 @@ def init_infrastructure():
             "alpine",
             command=f"sh -c 'echo {token} > /config/influx_token.txt'",
             volumes={"opt_config_data": {"bind": "/config", "mode": "rw"}},
-            remove=True
+            remove=True,
         )
-        
+
         client.containers.run(
             "influxdb:2",
             name="influxdb",
@@ -121,15 +122,16 @@ def init_infrastructure():
                 "DOCKER_INFLUXDB_INIT_ORG=planetracker",
                 "DOCKER_INFLUXDB_INIT_BUCKET=flights",
                 "DOCKER_INFLUXDB_INIT_RETENTION=0",
-                f"DOCKER_INFLUXDB_INIT_ADMIN_TOKEN={token}"
+                f"DOCKER_INFLUXDB_INIT_ADMIN_TOKEN={token}",
             ],
-            restart_policy={"Name": "unless-stopped"}
+            restart_policy={"Name": "unless-stopped"},
         )
     # Ensure a reverse proxy is deployed to route / -> UI and /api/ -> server
     try:
         deploy_proxy()
     except Exception as e:
         print(f"Warning deploying proxy: {e}")
+
 
 def deploy_ui():
     print("Checking UI Container...")
@@ -153,10 +155,10 @@ def deploy_ui():
                 "mmatvoz/openplanetracker-ui:latest",
                 name="live-viewer",
                 detach=True,
-                ports={"8000/tcp": 80}, # Binding container 8000 to host 80
+                ports={"8000/tcp": 8009},  # Binding container 8000 to host 8009
                 network=NETWORK_NAME,
                 volumes={"opt_config_data": {"bind": "/config", "mode": "ro"}},
-                restart_policy={"Name": "unless-stopped"}
+                restart_policy={"Name": "unless-stopped"},
             )
         except Exception as e:
             print(f"Local fallback or failure deploying UI: {e}")
@@ -195,7 +197,7 @@ def deploy_sentinel():
                 "opt_config_data": {"bind": "/config", "mode": "rw"},
             },
             network=NETWORK_NAME,
-            restart_policy={"Name": "unless-stopped"}
+            restart_policy={"Name": "unless-stopped"},
         )
         print("Started sentinel container")
     except Exception as e:
@@ -272,7 +274,7 @@ def deploy_proxy():
 
     # Prepare the nginx configuration
     if tls_enabled:
-        conf = '''server {
+        conf = """server {
     listen 80;
     server_name _;
     return 301 https://$host$request_uri;
@@ -303,9 +305,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
-'''
+"""
     else:
-        conf = '''server {
+        conf = """server {
     listen 80;
     server_name _;
 
@@ -325,7 +327,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
 }
-'''
+"""
 
     # Write the config into the opt_config_data volume via a short alpine container
     try:
@@ -333,7 +335,7 @@ server {
             "alpine:3.18",
             command=["sh", "-c", f"mkdir -p /config && cat > /config/default.conf <<'NGINXCONF'\n{conf}\nNGINXCONF"],
             volumes={"opt_config_data": {"bind": "/config", "mode": "rw"}},
-            remove=True
+            remove=True,
         )
     except Exception as e:
         # If writing failed, continue — maybe file already exists
@@ -357,11 +359,12 @@ server {
             network=NETWORK_NAME,
             ports=ports,
             volumes={"opt_config_data": {"bind": "/etc/nginx/conf.d", "mode": "ro"}},
-            restart_policy={"Name": "unless-stopped"}
+            restart_policy={"Name": "unless-stopped"},
         )
         print("Started openplanetracker-proxy (nginx)")
     except Exception as e:
         print(f"Failed to start proxy container: {e}")
+
 
 def deploy_server(expose_port: int | None = None):
     """Deploy the optional remote ingest server. If expose_port is provided
@@ -398,10 +401,11 @@ def deploy_server(expose_port: int | None = None):
             volumes={"opt_config_data": {"bind": "/config", "mode": "ro"}},
             environment=[f"OPT_SHARED_PSK={shared_psk}"],
             ports=ports,
-            restart_policy={"Name": "unless-stopped"}
+            restart_policy={"Name": "unless-stopped"},
         )
     except Exception as e:
         print(f"Failed to start server container: {e}")
+
 
 if __name__ == "__main__":
     init_infrastructure()
