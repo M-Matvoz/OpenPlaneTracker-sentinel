@@ -13,16 +13,26 @@ The Sentinel container is the control plane for OpenPlaneTracker. It is responsi
 
 Sentinel starts an `nginx` container named `openplanetracker-proxy`.
 
-Routing:
+**Public routing (WAN-accessible):**
 
-- `/` → `live-viewer:8000`
-- `/api/` → `openplanetracker-server:8080`
-- `/admin/` → `sentinel:8001`
+- `/` → `live-viewer:8000` (UI)
+- `/api/*` → `openplanetracker-server:8080` (API)
 
 The proxy listens on:
 
 - host port `80` for HTTP
 - host port `443` for HTTPS when TLS certs are present
+
+**Admin access is NOT proxied** — see "LAN-only access" below.
+
+## LAN-only access
+
+Sentinel and server admin endpoints are **only accessible from the LAN**, not through the public nginx proxy:
+
+- **Sentinel UI/Admin**: `http://<host>:8001` (LAN-only)
+- **Server admin endpoints**: `http://<host>:8089/admin/*` (LAN-only)
+
+These ports are bound to all LAN interfaces but not exposed externally through the proxy. This keeps the control plane secure and separate from the public-facing API and UI.
 
 ## TLS / HTTPS setup
 
@@ -71,21 +81,35 @@ When the cert files are missing:
 
 ## Container and port mapping summary
 
-- `sentinel` → port `8001`
-- `live-viewer` → internal port `8000`, not meant to be exposed directly to users
-- `openplanetracker-server` → internal port `8080`, not meant to be exposed directly to users
-- `openplanetracker-proxy` → host port `80` and optionally `443`
+**LAN-only (internal):**
+
+- `sentinel` → port `8001` (Sentinel UI and admin API)
+- `openplanetracker-server` → port `8089` (server admin endpoints)
+
+**Public (through nginx proxy):**
+
+- `openplanetracker-proxy` → host port `80` (HTTP) and optionally `443` (HTTPS)
+  - Forwards `/` to `live-viewer:8000` (UI)
+  - Forwards `/api/*` to `openplanetracker-server:8080` (API)
+
+**Internal-only (Docker network):**
+
+- `live-viewer` → internal port `8000` (UI, not exposed directly)
+- `openplanetracker-server` → internal port `8080` (API server, proxied to `/api/*` on public proxy)
 
 ## Admin routing
 
-The nginx proxy does **not** forward `/admin/*` to the server container.
+Admin endpoints are **not proxied through nginx** to maintain security:
 
-Instead:
+- Sentinel admin UI is accessible directly on port `8001` (LAN-only)
+- Server admin endpoints are accessible directly on port `8089` (LAN-only)
+- Sentinel proxies internal admin requests to the server over the Docker network
 
-- browser requests to `/admin/*` go to the Sentinel container
-- Sentinel forwards those requests internally to the server container over the Docker network
+This architecture ensures:
 
-This keeps the server admin API internal while still making it available through the Sentinel control panel.
+- Admin control plane is isolated from the public API
+- Sensitive operations (enable/disable external connections, register peers) are not exposed to WAN
+- Only the `/api/*` endpoints and UI are accessible from external networks through the nginx proxy
 
 ## Shared pre-shared key
 
