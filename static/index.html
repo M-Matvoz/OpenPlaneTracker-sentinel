@@ -13,6 +13,54 @@
 </head>
 <body>
     <h1>Sentinel SDR Manager</h1>
+
+    <div class="card">
+        <h3>Container Versions</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Container</th>
+                    <th>Current</th>
+                    <th>Latest</th>
+                    <th>Status</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="versionList"></tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h3>External ADSB Connections</h3>
+        <p><strong>Shared PSK:</strong> <span id="sharedPsk">Loading...</span></p>
+        <p><strong>External connections:</strong> <span id="externalConnState">Loading...</span></p>
+        <p><strong>Outgoing push:</strong> <span id="pushState">Loading...</span></p>
+        <label style="display:block;margin:8px 0;">
+            <input type="checkbox" id="externalEnabledToggle">
+            Enable external incoming connections
+        </label>
+        <button onclick="toggleExternalConnections()">Save External Connection Setting</button>
+
+        <hr style="margin:16px 0;">
+
+        <h4>Register another instance</h4>
+        <input type="text" id="peerName" placeholder="Peer name (e.g. site-2)">
+        <input type="text" id="peerUrl" placeholder="Peer URL (optional)">
+        <button onclick="registerPeer()">Register Peer</button>
+
+        <hr style="margin:16px 0;">
+
+        <h4>Outgoing collated.json push</h4>
+        <input type="text" id="pushTargetUrl" placeholder="Target ingest URL (e.g. http://other-server:8080/api/ingest)">
+        <input type="number" id="pushInterval" value="2" min="2" step="1" placeholder="Interval seconds">
+        <label style="display:block;margin:8px 0;">
+            <input type="checkbox" id="pushEnabledToggle" checked>
+            Enable outgoing push every 2 seconds
+        </label>
+        <button onclick="savePushConfig()">Save Push Config</button>
+
+        <div id="adminMessage" style="margin-top:12px;color:#0b5; font-weight:bold;"></div>
+    </div>
     
     <div class="card" id="updateCard">
         <h3>🚀 OpenPlaneTracker UI Update Available!</h3>
@@ -111,6 +159,117 @@
             }
         }
 
+        async function loadVersions() {
+            try {
+                let res = await fetch('/api/versions');
+                if (!res.ok) return;
+                let data = await res.json();
+                let tbody = document.getElementById('versionList');
+                tbody.innerHTML = '';
+
+                const rows = [
+                    { key: 'sentinel', label: 'Sentinel', action: 'updateSentinel' },
+                    { key: 'server', label: 'Server', action: 'updateServer' },
+                ];
+
+                rows.forEach(row => {
+                    const info = data[row.key] || {};
+                    const tr = document.createElement('tr');
+                    const status = info.update_available ? '<span style="color:#c0392b;font-weight:bold;">Update available</span>' : '<span style="color:#2e7d32;">Up to date</span>';
+                    tr.innerHTML = `
+                        <td>${row.label}</td>
+                        <td>${info.current_image_tag || 'n/a'}</td>
+                        <td>${info.latest_image_tag || 'n/a'}</td>
+                        <td>${status}</td>
+                        <td><button onclick="${row.action}()" style="background:#007bff; color:white; border:none; border-radius:4px;">One-click deploy</button></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                console.error('Napaka pri nalaganju verzij:', e);
+            }
+        }
+
+        async function loadAdminState() {
+            try {
+                let res = await fetch('/admin/state');
+                if (!res.ok) return;
+                let data = await res.json();
+                document.getElementById('sharedPsk').textContent = data.shared_psk || 'n/a';
+
+                const server = data.server || {};
+                const extEnabled = !!server.external_connections_enabled;
+                document.getElementById('externalConnState').textContent = extEnabled ? 'Enabled' : 'Disabled';
+                document.getElementById('externalEnabledToggle').checked = extEnabled;
+
+                const pushCfg = server.push_config || {};
+                document.getElementById('pushState').textContent = pushCfg.enabled ? `Enabled -> ${pushCfg.target_url || 'n/a'} every ${pushCfg.interval_seconds || 2}s` : 'Disabled';
+                document.getElementById('pushTargetUrl').value = pushCfg.target_url || '';
+                document.getElementById('pushInterval').value = pushCfg.interval_seconds || 2;
+                document.getElementById('pushEnabledToggle').checked = !!pushCfg.enabled;
+            } catch (e) {
+                console.error('Napaka pri nalaganju admin stanja:', e);
+            }
+        }
+
+        function setAdminMessage(msg, isError=false) {
+            const el = document.getElementById('adminMessage');
+            el.style.color = isError ? '#c0392b' : '#0b5';
+            el.textContent = msg;
+        }
+
+        async function toggleExternalConnections() {
+            const enabled = document.getElementById('externalEnabledToggle').checked;
+            const res = await fetch('/admin/external-connections/enable', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled})
+            });
+            if (res.ok) {
+                setAdminMessage(`External connections ${enabled ? 'enabled' : 'disabled'}.`);
+                loadAdminState();
+            } else {
+                setAdminMessage('Failed to update external connection setting.', true);
+            }
+        }
+
+        async function registerPeer() {
+            const peerName = document.getElementById('peerName').value.trim();
+            const peerUrl = document.getElementById('peerUrl').value.trim();
+            if (!peerName) return alert('Enter a peer name.');
+            const res = await fetch('/admin/peers/register', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({peer_name: peerName, peer_url: peerUrl || null})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAdminMessage(`Peer ${data.peer?.peer_name || peerName} registered with shared key.`);
+                loadAdminState();
+            } else {
+                const err = await res.text();
+                setAdminMessage(err || 'Failed to register peer.', true);
+            }
+        }
+
+        async function savePushConfig() {
+            const targetUrl = document.getElementById('pushTargetUrl').value.trim();
+            const intervalSeconds = parseInt(document.getElementById('pushInterval').value || '2', 10);
+            const enabled = document.getElementById('pushEnabledToggle').checked;
+            if (enabled && !targetUrl) return alert('Enter a target ingest URL.');
+            const res = await fetch('/admin/push-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({target_url: targetUrl, enabled, interval_seconds: intervalSeconds})
+            });
+            if (res.ok) {
+                setAdminMessage(enabled ? 'Outgoing push enabled.' : 'Outgoing push disabled.');
+                loadAdminState();
+            } else {
+                setAdminMessage('Failed to update outgoing push.', true);
+            }
+        }
+
         async function addSDR() {
             let name = document.getElementById('sdrName').value;
             let idx = document.getElementById('sdrIndex').value;
@@ -164,13 +323,39 @@
             checkUpdate();
         }
 
+        async function updateServer() {
+            if(!confirm('This will pull and redeploy the OpenPlaneTracker server container. Continue?')) return;
+            let res = await fetch('/api/update-server', {method: 'POST'});
+            if(res.ok) {
+                alert('Server update started.');
+            } else {
+                alert('Failed to start server update.');
+            }
+            loadVersions();
+        }
+
+        async function updateSentinel() {
+            if(!confirm('This will pull and redeploy the Sentinel container. Continue?')) return;
+            let res = await fetch('/api/update-sentinel', {method: 'POST'});
+            if(res.ok) {
+                alert('Sentinel update started. The page may disconnect while the container restarts.');
+            } else {
+                alert('Failed to start Sentinel update.');
+            }
+            loadVersions();
+        }
+
         // Zagon ob nalaganju strani
         loadUSBDevices();
         loadSDRs();
+        loadVersions();
+        loadAdminState();
         checkUpdate();
         
         // Intervalno osveževanje
         setInterval(loadSDRs, 5000);
+        setInterval(loadVersions, 60000);
+        setInterval(loadAdminState, 60000);
         setInterval(checkUpdate, 60000);
     </script>
 </body>

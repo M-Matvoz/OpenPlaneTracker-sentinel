@@ -5,6 +5,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import subprocess
 from contextlib import asynccontextmanager
+import threading
+import time
+import json
+import urllib.request
+import urllib.error
+import os
 
 NETWORK_NAME = "openplanetracker_sdr_network"
 
@@ -48,11 +54,128 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="/app/static"), name="static")
 
 client = docker.from_env()
+SERVER_INTERNAL_URL = os.getenv("OPT_SERVER_INTERNAL_URL", "http://openplanetracker-server:8080")
+
+
+def read_shared_volume_file(filename: str) -> str | None:
+    try:
+        output = client.containers.run(
+            "alpine:3.18",
+            command=["sh", "-c", f"cat /config/{filename}"],
+            volumes={"opt_config_data": {"bind": "/config", "mode": "ro"}},
+            remove=True,
+        )
+        if isinstance(output, bytes):
+            output = output.decode("utf-8", errors="ignore")
+        return str(output).strip()
+    except Exception:
+        return None
+
+
+def get_admin_token() -> str | None:
+    return read_shared_volume_file("admin_token.txt")
+
+
+def get_shared_psk() -> str | None:
+    return read_shared_volume_file("shared_psk.txt")
+
+
+def _server_admin_post(path: str, payload: dict):
+    admin_token = get_admin_token()
+    if not admin_token:
+        raise HTTPException(status_code=500, detail="Admin token not available")
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{SERVER_INTERNAL_URL}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Admin-Token": admin_token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else {"status": "ok"}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=e.code, detail=detail or str(e))
+
+
+def _server_admin_get(path: str):
+    admin_token = get_admin_token()
+    if not admin_token:
+        raise HTTPException(status_code=500, detail="Admin token not available")
+
+    req = urllib.request.Request(
+        f"{SERVER_INTERNAL_URL}{path}",
+        headers={"X-Admin-Token": admin_token},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body) if body else {}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore")
+        raise HTTPException(status_code=e.code, detail=detail or str(e))
+
+
+def _container_version_info(container_name: str, image_ref: str):
+    """Return current/latest image metadata for a container image."""
+    current = {
+        "container": container_name,
+        "deployed": False,
+        "running": False,
+        "current_image_id": None,
+        "current_image_tag": None,
+        "latest_image_id": None,
+        "latest_image_tag": image_ref,
+        "update_available": False,
+        "error": None,
+    }
+
+    try:
+        c = client.containers.get(container_name)
+        current["deployed"] = True
+        current["running"] = c.status == "running"
+        current["current_image_id"] = c.image.id
+        current["current_image_tag"] = c.image.tags[0] if c.image.tags else c.image.short_id
+    except docker.errors.NotFound:
+        pass
+    except Exception as e:
+        current["error"] = str(e)
+
+    try:
+        latest = client.images.pull(image_ref)
+        current["latest_image_id"] = latest.id
+        current["update_available"] = bool(current["current_image_id"] and current["current_image_id"] != latest.id)
+    except Exception as e:
+        current["error"] = str(e) if not current["error"] else current["error"]
+
+    return current
 
 class SDRConfig(BaseModel):
     name: str
     device_index: int = 0
     ppm: int = 0
+
+
+class ExternalConnectionsToggle(BaseModel):
+    enabled: bool = True
+
+
+class PeerRegistration(BaseModel):
+    peer_name: str
+    peer_url: str | None = None
+
+
+class PushConfig(BaseModel):
+    target_url: str
+    enabled: bool = True
+    interval_seconds: int = 2
 
 @app.get("/")
 def get_dashboard():
@@ -199,6 +322,15 @@ def check_update():
     except Exception as e:
         return {"update_available": False, "error": str(e)}
 
+
+@app.get("/api/versions")
+def get_versions():
+    """Report current and latest Sentinel/Server container versions."""
+    return {
+        "sentinel": _container_version_info("sentinel", "mmatvoz/openplanetracker-sentinel:latest"),
+        "server": _container_version_info("openplanetracker-server", "mmatvoz/openplanetracker-server:latest"),
+    }
+
 @app.post("/api/update-ui")
 def update_ui():
     try:
@@ -214,6 +346,63 @@ def update_ui():
         return {"status": "updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/update-server")
+def update_server():
+    """One-click pull + redeploy the server container."""
+    try:
+        import orchestrator
+
+        threading.Thread(target=orchestrator.redeploy_server, daemon=True).start()
+        return {"status": "updating"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/update-sentinel")
+def update_sentinel():
+    """One-click pull + redeploy the Sentinel container itself."""
+    try:
+        import orchestrator
+
+        def _delayed_update():
+            time.sleep(1)
+            orchestrator.redeploy_sentinel()
+
+        threading.Thread(target=_delayed_update, daemon=True).start()
+        return {"status": "updating"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/state")
+def admin_state():
+    """Expose server admin state and shared key to the Sentinel admin UI."""
+    server_state = _server_admin_get("/admin/state")
+    return {
+        "shared_psk": get_shared_psk(),
+        "server": server_state,
+    }
+
+
+@app.post("/admin/external-connections/enable")
+def admin_enable_external_connections(cfg: ExternalConnectionsToggle):
+    return _server_admin_post("/admin/external-connections/enable", cfg.model_dump())
+
+
+@app.post("/admin/peers/register")
+def admin_register_peer(peer: PeerRegistration):
+    payload = peer.model_dump()
+    payload["shared_key"] = get_shared_psk()
+    return _server_admin_post("/admin/peers/register", payload)
+
+
+@app.post("/admin/push-config")
+def admin_push_config(cfg: PushConfig):
+    payload = cfg.model_dump()
+    payload["shared_key"] = get_shared_psk()
+    return _server_admin_post("/admin/push-config", payload)
 
 
 @app.get("/api/server")
