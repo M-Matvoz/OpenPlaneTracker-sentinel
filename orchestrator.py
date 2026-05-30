@@ -2,12 +2,18 @@ import docker
 import secrets
 import os
 
-client = docker.from_env()
+try:
+    client = docker.from_env()
+except Exception as e:
+    client = None
+    print(f"Warning: Docker unavailable in orchestrator: {e}")
 NETWORK_NAME = "openplanetracker_sdr_network"
 
 
 def _read_shared_volume_file(filename: str) -> str | None:
     """Read a file from the shared opt_config_data volume via a short-lived container."""
+    if client is None:
+        return None
     try:
         output = client.containers.run(
             "alpine:3.18",
@@ -24,6 +30,8 @@ def _read_shared_volume_file(filename: str) -> str | None:
 
 def _write_shared_volume_file(filename: str, value: str) -> None:
     """Write a file into the shared opt_config_data volume via a short-lived container."""
+    if client is None:
+        raise RuntimeError("Docker unavailable")
     safe_value = value.replace("'", "'\\''")
     client.containers.run(
         "alpine:3.18",
@@ -47,6 +55,9 @@ def ensure_shared_psk() -> str:
 
 def init_infrastructure():
     print("Initializing Infrastructure...")
+    if client is None:
+        print("Docker unavailable; skipping infrastructure initialization.")
+        return
     try:
         client.networks.get(NETWORK_NAME)
     except docker.errors.NotFound:
@@ -122,6 +133,9 @@ def init_infrastructure():
 
 def deploy_ui():
     print("Checking UI Container...")
+    if client is None:
+        print("Docker unavailable; cannot deploy UI.")
+        return
     try:
         print("Pulling latest mmatvoz/openplanetracker-ui:latest...")
         client.images.pull("mmatvoz/openplanetracker-ui:latest")
@@ -151,6 +165,9 @@ def deploy_ui():
 def deploy_sentinel():
     """Deploy the Sentinel container itself."""
     print("Checking Sentinel Container...")
+    if client is None:
+        print("Docker unavailable; cannot deploy Sentinel.")
+        return
     try:
         print("Pulling latest mmatvoz/openplanetracker-sentinel:latest...")
         client.images.pull("mmatvoz/openplanetracker-sentinel:latest")
@@ -187,6 +204,9 @@ def deploy_sentinel():
 
 def redeploy_sentinel():
     """Pull and recreate the Sentinel container."""
+    if client is None:
+        print("Docker unavailable; cannot redeploy Sentinel.")
+        return
     try:
         client.images.pull("mmatvoz/openplanetracker-sentinel:latest")
     except Exception as e:
@@ -206,6 +226,9 @@ def redeploy_sentinel():
 
 def redeploy_server(expose_port: int | None = None):
     """Pull and recreate the Server container."""
+    if client is None:
+        print("Docker unavailable; cannot redeploy Server.")
+        return
     try:
         client.images.pull("mmatvoz/openplanetracker-server:latest")
     except Exception as e:
@@ -228,6 +251,9 @@ def deploy_proxy():
     The nginx config is written into the shared opt_config_data volume as default.conf
     and then an nginx container is started using that config.
     """
+    if client is None:
+        print("Docker unavailable; cannot deploy proxy.")
+        return
     # Decide whether TLS certs are present in the shared volume.
     # Expected layout:
     #   /config/tls/fullchain.pem

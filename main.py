@@ -14,10 +14,17 @@ import os
 
 NETWORK_NAME = "openplanetracker_sdr_network"
 
+try:
+    client = docker.from_env()
+except Exception as e:
+    client = None
+    print(f"[Sentinel] Warning: Docker unavailable: {e}")
+
 def self_connect_to_network():
+    if client is None:
+        print("[Sentinel] Docker unavailable; skipping network connection.")
+        return
     try:
-        client = docker.from_env()
-        
         # Preverimo, če omrežje že obstaja, sicer ga ustvarimo
         try:
             network = client.networks.get(NETWORK_NAME)
@@ -53,11 +60,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="/app/static"), name="static")
 
-client = docker.from_env()
 SERVER_INTERNAL_URL = os.getenv("OPT_SERVER_INTERNAL_URL", "http://openplanetracker-server:8080")
 
 
 def read_shared_volume_file(filename: str) -> str | None:
+    if client is None:
+        return None
     try:
         output = client.containers.run(
             "alpine:3.18",
@@ -148,6 +156,10 @@ def _container_version_info(container_name: str, image_ref: str):
         "error": None,
     }
 
+    if client is None:
+        current["error"] = "Docker unavailable"
+        return current
+
     try:
         c = client.containers.get(container_name)
         current["deployed"] = True
@@ -195,6 +207,8 @@ def get_dashboard():
 
 @app.get("/api/usb-devices")
 def get_usb_devices():
+    if client is None:
+        return []
     try:
         output = subprocess.check_output(["lsusb"], text=True)
         devices = []
@@ -226,6 +240,8 @@ def get_usb_devices():
 
 def get_used_device_indices():
     used_indices = set()
+    if client is None:
+        return used_indices
     try:
         containers = client.containers.list(all=True, filters={"name": "readsb-"})
         for c in containers:
@@ -243,6 +259,8 @@ def get_used_device_indices():
 
 @app.get("/api/sdrs")
 def list_sdrs():
+    if client is None:
+        return []
     containers = client.containers.list(all=True, filters={"name": "readsb-"})
     result = []
     for c in containers:
@@ -264,6 +282,8 @@ def list_sdrs():
 
 @app.post("/api/sdrs")
 def create_sdr(config: SDRConfig):
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     container_name = f"readsb-{config.name}"
     
     used_indices = get_used_device_indices()
@@ -310,6 +330,8 @@ def create_sdr(config: SDRConfig):
 
 @app.delete("/api/sdrs/{name}")
 def delete_sdr(name: str):
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         c = client.containers.get(name)
         c.stop(timeout=2)
@@ -330,6 +352,8 @@ def get_versions():
 @app.post("/api/restart-server")
 def restart_server():
     """Restart the server container without pulling a new image."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         c = client.containers.get("openplanetracker-server")
         c.restart(timeout=5)
@@ -343,6 +367,8 @@ def restart_server():
 @app.post("/api/restart-ui")
 def restart_ui():
     """Restart the UI container without pulling a new image."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         c = client.containers.get("live-viewer")
         c.restart(timeout=5)
@@ -356,6 +382,8 @@ def restart_ui():
 @app.post("/api/update-server")
 def update_server():
     """One-click pull + redeploy the server container."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         import orchestrator
 
@@ -368,6 +396,8 @@ def update_server():
 @app.post("/api/update-ui")
 def update_ui():
     """One-click pull + redeploy the UI container."""
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         import orchestrator
 
@@ -399,6 +429,8 @@ def update_sentinel():
     short-lived helper container that uses the Docker CLI (via the host Docker
     socket) to perform the pull/remove/run sequence on the host.
     """
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         # Unique name for the helper
         updater_name = f"sentinel-updater-{int(time.time())}"
@@ -408,7 +440,8 @@ def update_sentinel():
             "sh -c \"docker pull mmatvoz/openplanetracker-sentinel:latest && "
             "docker rm -f sentinel || true && "
             "docker run -d --name sentinel --privileged --network openplanetracker_sdr_network "
-            "-p 8001:8001 -v /dev/bus/usb:/dev/bus/usb -v opt_config_data:/config "
+            "-p 8001:8001 -v /var/run/docker.sock:/var/run/docker.sock "
+            "-v /dev/bus/usb:/dev/bus/usb -v opt_config_data:/config "
             "--restart unless-stopped mmatvoz/openplanetracker-sentinel:latest\"")
 
         client.containers.run(
@@ -476,6 +509,8 @@ def admin_push_config(cfg: PushConfig):
 
 @app.get("/api/server")
 def server_status():
+    if client is None:
+        return {"deployed": False, "status": "unavailable"}
     try:
         c = client.containers.get("openplanetracker-server")
         return {"deployed": True, "status": c.status}
@@ -485,6 +520,8 @@ def server_status():
 
 @app.post("/api/server/deploy")
 def deploy_server(expose_port: int | None = None):
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         import orchestrator
         orchestrator.deploy_server(expose_port)
@@ -495,6 +532,8 @@ def deploy_server(expose_port: int | None = None):
 
 @app.delete("/api/server")
 def remove_server():
+    if client is None:
+        raise HTTPException(status_code=503, detail="Docker unavailable")
     try:
         c = client.containers.get("openplanetracker-server")
         c.stop(timeout=2)
