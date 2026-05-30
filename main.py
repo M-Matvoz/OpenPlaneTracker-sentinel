@@ -80,6 +80,17 @@ def get_shared_psk() -> str | None:
     return read_shared_volume_file("shared_psk.txt")
 
 
+def write_shared_psk(psk: str) -> None:
+    """Write PSK back to shared volume."""
+    safe_psk = psk.replace("'", "'\\''")
+    client.containers.run(
+        "alpine:3.18",
+        command=["sh", "-c", f"mkdir -p /config && printf '%s' '{safe_psk}' > /config/shared_psk.txt"],
+        volumes={"opt_config_data": {"bind": "/config", "mode": "rw"}},
+        remove=True,
+    )
+
+
 def _server_admin_post(path: str, payload: dict):
     admin_token = get_admin_token()
     if not admin_token:
@@ -307,55 +318,37 @@ def delete_sdr(name: str):
     except docker.errors.NotFound:
         raise HTTPException(status_code=404, detail="SDR not found")
 
-@app.get("/api/check-update")
-def check_update():
-    try:
-        # Check running container image ID
-        c = client.containers.get("live-viewer")
-        running_id = c.image.id
-        
-        # Pull the absolute newest latest from Docker Hub
-        print("Polling Docker Hub for UI updates...")
-        new_image = client.images.pull("mmatvoz/openplanetracker-ui:latest")
-        
-        return {"update_available": running_id != new_image.id}
-    except Exception as e:
-        return {"update_available": False, "error": str(e)}
-
-
 @app.get("/api/versions")
 def get_versions():
-    """Report current and latest Sentinel/Server container versions."""
+    """Report current and latest Sentinel/Server/UI container versions."""
     return {
         "sentinel": _container_version_info("sentinel", "mmatvoz/openplanetracker-sentinel:latest"),
         "server": _container_version_info("openplanetracker-server", "mmatvoz/openplanetracker-server:latest"),
+        "ui": _container_version_info("live-viewer", "mmatvoz/openplanetracker-ui:latest"),
     }
 
-@app.post("/api/update-ui")
-def update_ui():
+@app.post("/api/restart-server")
+def restart_server():
+    """Restart the server container without pulling a new image."""
     try:
-        c = client.containers.get("live-viewer")
-        c.stop()
-        c.remove()
-    except:
-        pass
-        
-    try:
-        import orchestrator
-        orchestrator.deploy_ui()
-        return {"status": "updated"}
+        c = client.containers.get("openplanetracker-server")
+        c.restart(timeout=5)
+        return {"status": "restarting"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="Server container not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/update-server")
-def update_server():
-    """One-click pull + redeploy the server container."""
+@app.post("/api/restart-ui")
+def restart_ui():
+    """Restart the UI container without pulling a new image."""
     try:
-        import orchestrator
-
-        threading.Thread(target=orchestrator.redeploy_server, daemon=True).start()
-        return {"status": "updating"}
+        c = client.containers.get("live-viewer")
+        c.restart(timeout=5)
+        return {"status": "restarting"}
+    except docker.errors.NotFound:
+        raise HTTPException(status_code=404, detail="UI container not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -376,6 +369,19 @@ def update_sentinel():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/regenerate-psk")
+def regenerate_psk():
+    """Invalidate current PSK and generate a new one."""
+    import secrets
+    try:
+        new_psk = secrets.token_urlsafe(32)
+        write_shared_psk(new_psk)
+        # Notify server to reload the PSK from env (would require server restart or hot-reload)
+        return {"status": "regenerated", "new_psk": new_psk}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/admin/state")
 def admin_state():
     """Expose server admin state and shared key to the Sentinel admin UI."""
@@ -388,7 +394,11 @@ def admin_state():
 
 @app.post("/admin/external-connections/enable")
 def admin_enable_external_connections(cfg: ExternalConnectionsToggle):
-    return _server_admin_post("/admin/external-connections/enable", cfg.model_dump())
+    payload = cfg.model_dump()
+    # If external receive is enabled, disable push
+    if payload.get("enabled"):
+        payload["disable_push"] = True
+    return _server_admin_post("/admin/external-connections/enable", payload)
 
 
 @app.post("/admin/peers/register")
@@ -402,6 +412,9 @@ def admin_register_peer(peer: PeerRegistration):
 def admin_push_config(cfg: PushConfig):
     payload = cfg.model_dump()
     payload["shared_key"] = get_shared_psk()
+    # If push is enabled, disable external receive
+    if payload.get("enabled"):
+        payload["disable_receive"] = True
     return _server_admin_post("/admin/push-config", payload)
 
 
