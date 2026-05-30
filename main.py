@@ -353,6 +353,43 @@ def restart_ui():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/update-server")
+def update_server():
+    """One-click pull + redeploy the server container."""
+    try:
+        import orchestrator
+
+        threading.Thread(target=orchestrator.redeploy_server, daemon=True).start()
+        return {"status": "updating"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/update-ui")
+def update_ui():
+    """One-click pull + redeploy the UI container."""
+    try:
+        import orchestrator
+
+        def _delayed_update():
+            try:
+                c = client.containers.get("live-viewer")
+                c.stop(timeout=5)
+                c.remove()
+            except docker.errors.NotFound:
+                pass
+            except Exception:
+                pass
+
+            time.sleep(1)
+            orchestrator.deploy_ui()
+
+        threading.Thread(target=_delayed_update, daemon=True).start()
+        return {"status": "updating"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/update-sentinel")
 def update_sentinel():
     """Trigger a background updater container that pulls and redeploys Sentinel.

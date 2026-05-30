@@ -178,13 +178,27 @@
                     const info = data[row.key] || {};
                     const tr = document.createElement('tr');
                     const status = info.running ? '<span style="color:#2e7d32;">● Running</span>' : '<span style="color:#c0392b;">● Stopped</span>';
-                    const actionLabel = row.key === 'sentinel' ? 'Update' : 'Restart';
-                    const actionStyle = row.key === 'sentinel' ? 'background:#007bff;' : 'background:#ff9800;';
+                    const updateVisible = !!info.update_available;
+                    const actionBits = [];
+
+                    if (row.key === 'sentinel') {
+                        if (updateVisible) {
+                            actionBits.push('<button onclick="updateSentinel()" style="background:#007bff; color:white; border:none; border-radius:4px; margin-right:6px;">Update</button>');
+                        } else {
+                            actionBits.push('<span style="color:#666; margin-right:6px;">Up to date</span>');
+                        }
+                    } else {
+                        if (updateVisible) {
+                            actionBits.push(`<button onclick="update${row.label}()" style="background:#007bff; color:white; border:none; border-radius:4px; margin-right:6px;">Update</button>`);
+                        }
+                        actionBits.push(`<button onclick="${row.action}()" style="background:#ff9800; color:white; border:none; border-radius:4px;">Restart</button>`);
+                    }
+
                     tr.innerHTML = `
                         <td>${row.label}</td>
                         <td>${info.current_image_tag || 'n/a'}</td>
                         <td>${status}</td>
-                        <td><button onclick="${row.action}()" style="${actionStyle} color:white; border:none; border-radius:4px;">${actionLabel}</button></td>
+                        <td>${actionBits.join('')}</td>
                     `;
                     tbody.appendChild(tr);
                 });
@@ -417,6 +431,36 @@
                 }
             } catch (e) {
                 alert('Error restarting UI: ' + e.message);
+            }
+        }
+
+        async function updateServer() {
+            if(!confirm('This will pull and redeploy the server container. Continue?')) return;
+            try {
+                const res = await fetch('/api/update-server', { method: 'POST' });
+                if (res.ok) {
+                    alert('Server update started.');
+                    loadContainerStatus();
+                } else {
+                    alert('Failed to start server update.');
+                }
+            } catch (e) {
+                alert('Error updating server: ' + e.message);
+            }
+        }
+
+        async function updateUI() {
+            if(!confirm('This will pull and redeploy the UI container. Continue?')) return;
+            try {
+                const res = await fetch('/api/update-ui', { method: 'POST' });
+                if (res.ok) {
+                    alert('UI update started.');
+                    loadContainerStatus();
+                } else {
+                    alert('Failed to start UI update.');
+                }
+            } catch (e) {
+                alert('Error updating UI: ' + e.message);
             }
         }
 
