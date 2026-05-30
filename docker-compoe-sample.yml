@@ -1,0 +1,19 @@
+services:
+  sentinel:
+    image: mmatvoz/openplanetracker-sentinel:latest
+    container_name: sentinel
+    privileged: true
+    ports:
+      - "8001:8001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /dev/bus/usb:/dev/bus/usb
+    # S tem ukazom prisilimo sentinel, da se takoj poveže v SDR omrežje
+    networks:
+      - default
+      - sdr_network
+
+networks:
+  # Tukaj povemo compose-u, da sdr_network že obstaja oz. naj se imenuje točno tako
+  sdr_network:
+    name: openplanetracker_sdr_network
